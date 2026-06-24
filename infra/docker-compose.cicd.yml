@@ -1,0 +1,62 @@
+name: sentinelops-cicd
+
+# Jenkins, SonarQube, and Nexus run here as standalone containers
+# rather than inside the kind cluster — much simpler to configure,
+# and a common real-world pattern (CI tooling outside the workload cluster).
+#
+# All three attach to the kind cluster's docker network so Jenkins
+# can later reach the cluster's API server by container address.
+
+networks:
+  cicd-net:
+    name: sentinelops-cicd-net
+
+volumes:
+  jenkins-data:
+  sonarqube-data:
+  sonarqube-extensions:
+  sonarqube-logs:
+  nexus-data:
+
+services:
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: sentinelops-jenkins
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # Jenkins UI
+      - "50000:50000" # Jenkins agent port
+    volumes:
+      - jenkins-data:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
+    networks:
+      - cicd-net
+
+  sonarqube:
+    image: sonarqube:lts-community
+    container_name: sentinelops-sonarqube
+    restart: unless-stopped
+    ports:
+      - "9000:9000"   # SonarQube UI
+    environment:
+      - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+    volumes:
+      - sonarqube-data:/opt/sonarqube/data
+      - sonarqube-extensions:/opt/sonarqube/extensions
+      - sonarqube-logs:/opt/sonarqube/logs
+    networks:
+      - cicd-net
+
+  nexus:
+    image: sonatype/nexus3:latest
+    container_name: sentinelops-nexus
+    restart: unless-stopped
+    ports:
+      - "8081:8081"   # Nexus UI / Maven repo
+      - "8082:8082"   # Docker registry (configure as a repo in Nexus UI)
+    volumes:
+      - nexus-data:/nexus-data
+    networks:
+      - cicd-net

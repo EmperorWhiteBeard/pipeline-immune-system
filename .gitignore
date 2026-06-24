@@ -1,0 +1,50 @@
+# --- Terraform ---
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+.terraform.lock.hcl
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# --- Java / Maven ---
+target/
+*.class
+*.jar
+*.war
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/timing.properties
+
+# --- Python (scoring / rootcause services) ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# --- Docker / Compose ---
+.env
+
+# --- Kubernetes / kubeconfig ---
+kubeconfig*
+*.kubeconfig
+
+# --- IDE / OS ---
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# --- Secrets (never commit real values) ---
+*.pem
+*.key
+secrets.yaml
+secrets.yml
+
+# --- Logs ---
+*.log
