@@ -31,10 +31,9 @@ A deliberately simple Spring Boot REST API (task tracker) — `POST /tasks`, `GE
 | SCA | OWASP Dependency-Check | Dependency CVE score (input #2) |
 | Container Security | Trivy | Container image CVE score (input #3) |
 | Artifact/Container Registry | Nexus | Stores build artifacts + Docker images |
-| IaC | Terraform | Provisions the kind cluster (and cloud infra, optionally) |
-| Config Management | Ansible | Node/config-level reconciliation |
-| Containerization | Docker | Packages the app |
-| Orchestration | Kubernetes (kind) | Runs the live app pods |
+| IaC | Terraform | Provisions the EC2 instance, security group, and key pair |
+| Containerization | Docker | Packages the app and runs the CI stack |
+| Orchestration | Kubernetes (k3s) | Runs the live app pods on the EC2 host |
 | CD / GitOps | ArgoCD | Syncs cluster state from Git, performs rollback |
 | Observability | Prometheus & Grafana | Metrics, alert rules, risk-score-vs-error-rate dashboard |
 | Alerts | Slack Webhooks | Approval cards, root-cause alerts |
@@ -50,11 +49,10 @@ A deliberately simple Spring Boot REST API (task tracker) — `POST /tasks`, `GE
 ├── rootcause/                # Failure classifier + Flask webhook listener (Stage 4)
 ├── infra/
 │   ├── terraform/
-│   │   ├── modules/kind-cluster/    # Reusable kind cluster module
+│   │   ├── modules/ec2-host/        # Reusable EC2 + k3s bootstrap module
 │   │   └── environments/
-│   │       ├── local/                # What you actually run day-to-day
-│   │       └── cloud/                # Placeholder for an EKS/GKE demo recording
-│   ├── ansible/               # Config management playbooks
+│   │       ├── local/                # Primary dev environment (AWS ap-south-1)
+│   │       └── cloud/                # Retired placeholder
 │   ├── docker-compose.cicd.yml # Jenkins + SonarQube + Nexus
 │   └── scripts/
 │       ├── bootstrap.sh       # One-command Stage 0 setup
@@ -72,32 +70,53 @@ A deliberately simple Spring Boot REST API (task tracker) — `POST /tasks`, `GE
 
 ## Getting started (Stage 0)
 
-Prerequisites: Docker, Terraform, `kubectl`, `kind`.
+Prerequisites: Terraform, AWS CLI (configured with `aws configure`).
 
-```bash
-./infra/scripts/bootstrap.sh
-```
+1. Get your public IP:
+   ```bash
+   curl -s https://checkip.amazonaws.com
+   ```
 
-This provisions a local `kind` cluster via Terraform and starts Jenkins, SonarQube, and Nexus via Docker Compose.
+2. Create your Terraform variables file:
+   ```bash
+   cp infra/terraform/environments/local/terraform.tfvars.example infra/terraform/environments/local/terraform.tfvars
+   # Edit terraform.tfvars and set allowed_cidr to YOUR_PUBLIC_IP/32
+   ```
+
+3. Bootstrap the environment:
+   ```bash
+   ./infra/scripts/bootstrap.sh
+   ```
+
+   This provisions an Ubuntu 22.04 EC2 instance (`m7i-flex.large`) in `ap-south-1` via Terraform. The instance automatically installs Docker, k3s, and starts Jenkins, SonarQube, and Nexus via Docker Compose (cloud-init). After ~2–3 minutes, the services are ready.
+
+4. Save the private key and SSH in:
+   ```bash
+   cd infra/terraform/environments/local
+   terraform output -raw private_key_pem > sentinelops-key.pem
+   chmod 600 sentinelops-key.pem
+   ssh -i sentinelops-key.pem ubuntu@$(terraform output -raw public_ip)
+   ```
 
 | Service | URL | Default credentials |
 |---|---|---|
-| Jenkins | http://localhost:8080 | set on first login |
-| SonarQube | http://localhost:9000 | admin / admin |
-| Nexus | http://localhost:8081 | admin / see `docker exec sentinelops-nexus cat /nexus-data/admin.password` |
+| Jenkins | `http://<PUBLIC_IP>:8080` | set on first login |
+| SonarQube | `http://<PUBLIC_IP>:9000` | admin / admin |
+| Nexus | `http://<PUBLIC_IP>:8081` | admin / see `docker exec sentinelops-nexus cat /nexus-data/admin.password` |
 
-To tear everything down:
+To tear everything down (stops billing for the EC2 instance):
 
 ```bash
-./infra/scripts/teardown.sh        # keep volumes (fast restart later)
-./infra/scripts/teardown.sh -v     # full wipe, including volumes
+./infra/scripts/teardown.sh
 ```
 
-> **Note:** SonarQube's bundled Elasticsearch requires `vm.max_map_count >= 262144` on the Docker host. `bootstrap.sh` checks this and tells you the exact command to run if it's too low.
+> **Cost note:** The EC2 instance is billed per hour while running. When you're done working, either run `teardown.sh` or stop the instance from the AWS Console to avoid burning credits. The EBS volume persists when stopped (pennies per GB-month) so your data is safe.
+
+> **Security note:** The security group is locked to your public IP only. If your IP changes (e.g., router restart), you may need to re-run `terraform apply` to update the ingress rules.
 
 ## Project status
 
-- [x] Stage 0 — Repo scaffold, kind cluster (Terraform), Jenkins/SonarQube/Nexus (Compose)
+- [x] Stage 0 — Repo scaffold, AWS EC2 + k3s (Terraform), Jenkins/SonarQube/Nexus (Compose via cloud-init)
 - [ ] Stage 1 — Spring Boot payload app
 - [ ] Stage 2 — CI pipeline + risk scoring engine
 - [ ] Stage 3 — GitOps deploy (ArgoCD) + observability (Prometheus/Grafana)

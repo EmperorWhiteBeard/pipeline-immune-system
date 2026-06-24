@@ -1,0 +1,11 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# DO NOT commit terraform.tfvars to Git — it is already .gitignore'd.
+
+# Get your public IP from https://checkip.amazonaws.com/
+allowed_cidr = "YOUR_PUBLIC_IP/32"
+
+# Optional overrides (uncomment if needed):
+# aws_region       = "ap-south-1"
+# instance_type    = "m7i-flex.large"
+# instance_name    = "sentinelops"
+# root_volume_size = 30

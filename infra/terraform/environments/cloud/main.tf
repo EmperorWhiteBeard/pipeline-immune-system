@@ -1,13 +1,5 @@
-# Cloud environment (EKS/GKE) — intentionally not implemented yet.
+# Cloud environment — retired.
 #
-# Plan: this environment is only needed if/when we record a demo on a
-# real managed Kubernetes cluster (see project handoff doc, Stage 5).
-# It should reuse shared modules where possible (e.g. a future
-# `modules/k8s-platform` module for ArgoCD/Prometheus/Grafana install)
-# so behavior matches the local environment as closely as possible.
-#
-# Until then, all development happens against infra/terraform/environments/local.
-
-terraform {
-  required_version = ">= 1.5"
-}
+# AWS is now the primary development environment (infra/terraform/environments/local).
+# This file is kept as a placeholder in case a multi-environment setup is needed later
+# (e.g., separate staging / prod environments), but is not used for Stage 0–5.

@@ -1,11 +1,9 @@
 name: sentinelops-cicd
 
-# Jenkins, SonarQube, and Nexus run here as standalone containers
-# rather than inside the kind cluster — much simpler to configure,
-# and a common real-world pattern (CI tooling outside the workload cluster).
-#
-# All three attach to the kind cluster's docker network so Jenkins
-# can later reach the cluster's API server by container address.
+# Jenkins, SonarQube, and Nexus run as standalone containers on the EC2
+# host alongside k3s. This is a common real-world pattern: CI tooling lives
+# on a dedicated host or separate nodes, while the workload cluster (k3s)
+# runs only the production workloads.
 
 networks:
   cicd-net:

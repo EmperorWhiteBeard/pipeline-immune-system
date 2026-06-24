@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Stage 0 bootstrap: brings up the kind cluster (via Terraform) and the
-# Jenkins/SonarQube/Nexus stack (via Docker Compose).
+# Stage 0 bootstrap: provisions an AWS EC2 instance (m7i-flex.large) with
+# Terraform, then the instance self-bootstraps Docker, k3s, and the CI stack
+# via cloud-init.
 #
 # Usage: ./infra/scripts/bootstrap.sh
 
@@ -8,48 +9,49 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TF_DIR="$REPO_ROOT/infra/terraform/environments/local"
-COMPOSE_FILE="$REPO_ROOT/infra/docker-compose.cicd.yml"
+TFVARS="$TF_DIR/terraform.tfvars"
 
 echo "==> Checking prerequisites"
-for cmd in docker terraform kubectl kind; do
+for cmd in terraform aws; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "ERROR: '$cmd' not found on PATH. Install it before continuing." >&2
     exit 1
   fi
 done
 
-# SonarQube's bundled Elasticsearch refuses to start unless the host's
-# vm.max_map_count is raised. This is a host-level sysctl, not something
-# Docker Compose can set for you, so check and warn explicitly.
-CURRENT_MAX_MAP_COUNT="$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)"
-if [ "$CURRENT_MAX_MAP_COUNT" -lt 262144 ]; then
-  echo
-  echo "WARNING: vm.max_map_count is $CURRENT_MAX_MAP_COUNT (SonarQube needs >= 262144)."
-  echo "  Run this once on your host, then re-run this script:"
-  echo "    sudo sysctl -w vm.max_map_count=262144"
-  echo "  To make it permanent, add 'vm.max_map_count=262144' to /etc/sysctl.conf"
-  echo
+if ! aws sts get-caller-identity >/dev/null 2>&1; then
+  echo "ERROR: AWS CLI is not authenticated. Run 'aws configure' first." >&2
   exit 1
 fi
 
-echo "==> Provisioning kind cluster with Terraform"
+if [ ! -f "$TFVARS" ]; then
+  echo "ERROR: $TFVARS not found." >&2
+  echo "  Copy terraform.tfvars.example and set your public IP:" >&2
+  echo "    cp $TF_DIR/terraform.tfvars.example $TFVARS" >&2
+  echo "    # edit $TFVARS and set allowed_cidr to YOUR_PUBLIC_IP/32" >&2
+  exit 1
+fi
+
+echo "==> Provisioning EC2 instance with Terraform"
 cd "$TF_DIR"
 terraform init -upgrade
-terraform apply -auto-approve
+terraform apply
 
-echo "==> Pointing kubectl at the new cluster"
-KUBECONFIG_PATH="$(terraform output -raw kubeconfig_path)"
-export KUBECONFIG="$KUBECONFIG_PATH"
-kubectl cluster-info
+PUBLIC_IP="$(terraform output -raw public_ip)"
 
-echo "==> Starting Jenkins / SonarQube / Nexus"
-docker compose -f "$COMPOSE_FILE" up -d
-
-echo
-echo "==> Stage 0 is up."
-echo "    Cluster:    $(terraform output -raw cluster_name) (KUBECONFIG=$KUBECONFIG_PATH)"
-echo "    Jenkins:    http://localhost:8080"
-echo "    SonarQube:  http://localhost:9000  (default login admin/admin)"
-echo "    Nexus:      http://localhost:8081  (initial password: docker exec sentinelops-nexus cat /nexus-data/admin.password)"
-echo
-echo "Next: open each UI once to confirm it's reachable, then move to Stage 1 (the Spring Boot app)."
+echo ""
+echo "==> Stage 0 is deploying on AWS."
+echo "    Instance IP:  $PUBLIC_IP"
+echo "    Region:       $(terraform output -raw -var aws_region 2>/dev/null || echo 'ap-south-1 (default)')"
+echo ""
+echo "==> Save the private key so you can SSH in:"
+echo "    terraform output -raw private_key_pem > sentinelops-key.pem"
+echo "    chmod 600 sentinelops-key.pem"
+echo "    ssh -i sentinelops-key.pem ubuntu@$PUBLIC_IP"
+echo ""
+echo "==> Service URLs (available after cloud-init finishes, ~2-3 min):"
+echo "    Jenkins:    http://$PUBLIC_IP:8080"
+echo "    SonarQube:  http://$PUBLIC_IP:9000  (admin / admin)"
+echo "    Nexus:      http://$PUBLIC_IP:8081"
+echo ""
+echo "Next: SSH in and verify the stack is up, then move to Stage 1 (Spring Boot app)."

@@ -1,0 +1,74 @@
+#cloud-config
+package_update: true
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+  - git
+  - jq
+  - unzip
+  - make
+
+runcmd:
+  # ------------------------------------------------------------------
+  # 1. Host tuning for SonarQube (Elasticsearch needs this)
+  # ------------------------------------------------------------------
+  - sysctl -w vm.max_map_count=262144
+  - echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
+
+  # ------------------------------------------------------------------
+  # 2. Docker + Docker Compose plugin
+  # ------------------------------------------------------------------
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+  - |
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  - usermod -aG docker ubuntu
+  - systemctl enable docker
+  - systemctl start docker
+
+  # ------------------------------------------------------------------
+  # 3. k3s (lightweight Kubernetes — single-node, no Traefik to save RAM)
+  # ------------------------------------------------------------------
+  - curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --disable traefik --write-kubeconfig-mode 644" sh -
+  - mkdir -p /home/ubuntu/.kube
+  - cp /etc/rancher/k3s/k3s.yaml /home/ubuntu/.kube/config
+  - chown -R ubuntu:ubuntu /home/ubuntu/.kube
+  - chmod 600 /home/ubuntu/.kube/config
+
+  # ------------------------------------------------------------------
+  # 4. Clone the project repo and start the CI stack
+  # ------------------------------------------------------------------
+  - git clone ${repo_url} /opt/sentinelops
+  - chown -R ubuntu:ubuntu /opt/sentinelops
+  - cd /opt/sentinelops && docker compose -f infra/docker-compose.cicd.yml up -d
+
+  # ------------------------------------------------------------------
+  # 5. Verify k3s is ready
+  # ------------------------------------------------------------------
+  - sleep 15
+  - kubectl get nodes > /dev/console || true
+  - docker ps > /dev/console || true
+
+  # ------------------------------------------------------------------
+  # 6. MOTD / login banner
+  # ------------------------------------------------------------------
+  - |
+    cat <<'EOF' > /etc/update-motd.d/99-sentinelops
+    #!/bin/sh
+    echo ""
+    echo "=== SentinelOps Stage 0 ==="
+    echo "k3s status:   $(kubectl get nodes -o name 2>/dev/null | wc -l) node(s) ready"
+    echo "Jenkins:      http://$(hostname -I | awk '{print $1}'):8080"
+    echo "SonarQube:    http://$(hostname -I | awk '{print $1}'):9000  (admin / admin)"
+    echo "Nexus:        http://$(hostname -I | awk '{print $1}'):8081"
+    echo "Repo path:    /opt/sentinelops"
+    echo ""
+    EOF
+  - chmod +x /etc/update-motd.d/99-sentinelops
+  - run-parts /etc/update-motd.d/ > /var/run/motd.dynamic.new && mv /var/run/motd.dynamic.new /var/run/motd.dynamic
+
+final_message: "SentinelOps cloud-init finished. The system is ready."

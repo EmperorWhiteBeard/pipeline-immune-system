@@ -1,19 +1,10 @@
-terraform {
-  required_version = ">= 1.5"
+module "ec2_host" {
+  source = "../../modules/ec2-host"
 
-  required_providers {
-    kind = {
-      source  = "tehcyx/kind"
-      version = "~> 0.6"
-    }
-  }
-}
-
-provider "kind" {}
-
-module "kind_cluster" {
-  source = "../../modules/kind-cluster"
-
-  cluster_name = var.cluster_name
-  worker_count = var.worker_count
+  instance_name    = var.instance_name
+  instance_type    = var.instance_type
+  allowed_cidr     = var.allowed_cidr
+  vpc_id           = var.vpc_id
+  repo_url         = var.repo_url
+  root_volume_size = var.root_volume_size
 }
