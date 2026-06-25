@@ -1,0 +1,256 @@
+pipeline {
+    agent { label 'docker' }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
+    environment {
+        // --- Service URLs (inside Docker network on EC2 host) ---
+        NEXUS_URL           = 'http://localhost:8081'
+        NEXUS_DOCKER_REGISTRY = 'localhost:8082'
+        SONARQUBE_URL       = 'http://localhost:9000'
+        SONAR_PROJECT_KEY   = 'sentinelops-tasktracker'
+        APP_NAME            = 'sentinelops-tasktracker'
+        APP_VERSION         = "0.0.1-${BUILD_NUMBER}"
+
+        // --- Credentials (configured in Jenkins UI) ---
+        SONAR_TOKEN         = credentials('sonar-token')
+        NEXUS_CREDENTIALS   = credentials('nexus-credentials')   // username/password
+        SLACK_WEBHOOK_URL   = credentials('slack-webhook')
+    }
+
+    stages {
+        // ------------------------------------------------------------------
+        // Stage 1: Checkout
+        // ------------------------------------------------------------------
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Stage 2: Maven Build + Unit Tests
+        // ------------------------------------------------------------------
+        stage('Build') {
+            agent {
+                docker {
+                    image 'maven:3.9-eclipse-temurin-17-alpine'
+                    args '-v /root/.m2:/root/.m2:rw -u root'
+                }
+            }
+            steps {
+                dir('app') {
+                    sh 'mvn clean package -DskipTests=false'
+                }
+            }
+            post {
+                always {
+                    junit 'app/target/surefire-reports/*.xml'
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Stage 3: SonarQube Static Analysis
+        // ------------------------------------------------------------------
+        stage('SonarQube') {
+            agent {
+                docker {
+                    image 'sonarsource/sonar-scanner-cli:latest'
+                    args '--network host'
+                }
+            }
+            steps {
+                dir('app') {
+                    sh """
+                        sonar-scanner \
+                          -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                          -Dsonar.sources=src/main/java \
+                          -Dsonar.host.url=${SONARQUBE_URL} \
+                          -Dsonar.login=${SONAR_TOKEN} \
+                          -Dsonar.java.binaries=target/classes
+                    """
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Stage 4: OWASP Dependency-Check (SCA)
+        // ------------------------------------------------------------------
+        stage('OWASP Dependency-Check') {
+            agent {
+                docker {
+                    image 'owasp/dependency-check:latest'
+                    args '-v /root/.dependency-check:/usr/share/dependency-check/data:rw --entrypoint=""'
+                }
+            }
+            steps {
+                dir('app') {
+                    sh """
+                        dependency-check.sh \
+                          --project "${APP_NAME}" \
+                          --scan target/dependency-check-report \
+                          --format JSON \
+                          --format HTML \
+                          --out reports/dependency-check-report.json \
+                          --nvdApiKey "" || true
+                    """
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'app/reports/dependency-check-report.json', allowEmptyArchive: true
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Stage 5: Docker Build + Push to Nexus
+        // ------------------------------------------------------------------
+        stage('Docker Build & Push') {
+            steps {
+                script {
+                    def imageTag = "${NEXUS_DOCKER_REGISTRY}/${APP_NAME}:${APP_VERSION}"
+                    dir('app') {
+                        // Build
+                        sh "docker build -t ${imageTag} ."
+                        // Login to Nexus Docker registry
+                        sh """
+                            echo "${NEXUS_CREDENTIALS_PSW}" | docker login ${NEXUS_DOCKER_REGISTRY} -u "${NEXUS_CREDENTIALS_USR}" --password-stdin
+                        """
+                        // Push
+                        sh "docker push ${imageTag}"
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Stage 6: Trivy Container Image Scan
+        // ------------------------------------------------------------------
+        stage('Trivy Scan') {
+            agent {
+                docker {
+                    image 'aquasec/trivy:latest'
+                    args '--network host --entrypoint="" -v /var/run/docker.sock:/var/run/docker.sock'
+                }
+            }
+            steps {
+                script {
+                    def imageTag = "${NEXUS_DOCKER_REGISTRY}/${APP_NAME}:${APP_VERSION}"
+                    sh """
+                        trivy image --format json --output reports/trivy-report.json ${imageTag} || true
+                    """
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'reports/trivy-report.json', allowEmptyArchive: true
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Stage 7: Risk Score Aggregation
+        // ------------------------------------------------------------------
+        stage('Risk Score') {
+            agent {
+                docker {
+                    image 'python:3.11-alpine'
+                    args '--entrypoint=""'
+                }
+            }
+            steps {
+                script {
+                    // Fetch SonarQube issue counts via API
+                    sh """
+                        curl -s -u ${SONAR_TOKEN}: "${SONARQUBE_URL}/api/issues/search?componentKeys=${SONAR_PROJECT_KEY}&ps=500&severities=BLOCKER,CRITICAL,MAJOR,MINOR" > reports/sonar-issues.json || true
+                    """
+
+                    dir('scoring') {
+                        sh 'pip install -r requirements.txt'
+                        sh 'python risk_score.py'
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'scoring/risk_score_result.json', allowEmptyArchive: true
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Stage 8: Slack Approval Gate (gated by risk score threshold)
+        // ------------------------------------------------------------------
+        stage('Slack Approval Gate') {
+            steps {
+                script {
+                    def scoreFile = readJSON file: 'scoring/risk_score_result.json'
+                    def riskScore = scoreFile.score as Integer
+                    def threshold = 70   // configurable threshold
+                    env.RISK_SCORE = riskScore.toString()
+                    env.RISK_THRESHOLD = threshold.toString()
+                    env.RISK_DECISION = scoreFile.decision
+
+                    echo "Risk Score: ${riskScore} / Threshold: ${threshold} → Decision: ${scoreFile.decision}"
+
+                    if (riskScore > threshold) {
+                        // High risk — send Slack approval card and wait for human decision
+                        def slackPayload = readFile('slack/approval-request.json')
+                            .replace('{{BUILD_NUMBER}}', env.BUILD_NUMBER)
+                            .replace('{{BUILD_URL}}', env.BUILD_URL)
+                            .replace('{{RISK_SCORE}}', env.RISK_SCORE)
+                            .replace('{{RISK_THRESHOLD}}', env.RISK_THRESHOLD)
+                            .replace('{{APP_NAME}}', env.APP_NAME)
+
+                        sh """
+                            curl -s -X POST "${SLACK_WEBHOOK_URL}" \
+                              -H 'Content-Type: application/json' \
+                              -d '${slackPayload}'
+                        """
+
+                        // Pause pipeline waiting for manual approval via input step
+                        // In production this would be a Slack interactive button callback
+                        // For now, use Jenkins input step as a stand-in
+                        input message: "Risk score ${riskScore} exceeds threshold ${threshold}. Approve deploy?", ok: 'Approve', submitterParameter: 'APPROVER'
+
+                        echo "Deploy approved by ${env.APPROVER}"
+                    } else {
+                        echo "Risk score ${riskScore} within threshold — auto-promoting"
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Stage 9: Deploy to k3s (placeholder — full GitOps via ArgoCD in Stage 3)
+        // ------------------------------------------------------------------
+        stage('Deploy to k3s') {
+            steps {
+                echo "Deploy stage placeholder — ArgoCD Application will be configured in Stage 3"
+            }
+        }
+    }
+
+    post {
+        failure {
+            script {
+                // Send failure notification to Slack
+                def slackPayload = readFile('slack/approval-denied.json')
+                    .replace('{{BUILD_NUMBER}}', env.BUILD_NUMBER)
+                    .replace('{{BUILD_URL}}', env.BUILD_URL)
+                    .replace('{{APP_NAME}}', env.APP_NAME)
+
+                sh """
+                    curl -s -X POST "${SLACK_WEBHOOK_URL}" \
+                      -H 'Content-Type: application/json' \
+                      -d '${slackPayload}' || true
+                """
+            }
+        }
+    }
+}

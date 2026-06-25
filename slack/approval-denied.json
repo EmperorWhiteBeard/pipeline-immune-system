@@ -1,0 +1,28 @@
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": {
+        "type": "plain_text",
+        "text": "❌ SentinelOps — Pipeline Failed",
+        "emoji": true
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*{{APP_NAME}}* build #{{BUILD_NUMBER}} failed. Check the Jenkins console for details."
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "<{{BUILD_URL}}|View Jenkins Build>"
+        }
+      ]
+    }
+  ]
+}

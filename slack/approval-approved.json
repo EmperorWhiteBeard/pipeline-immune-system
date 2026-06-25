@@ -1,0 +1,28 @@
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": {
+        "type": "plain_text",
+        "text": "✅ SentinelOps — Deploy Approved",
+        "emoji": true
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*{{APP_NAME}}* build #{{BUILD_NUMBER}} has been approved for deployment. ArgoCD will sync the changes to the cluster."
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "<{{BUILD_URL}}|View Jenkins Build>"
+        }
+      ]
+    }
+  ]
+}

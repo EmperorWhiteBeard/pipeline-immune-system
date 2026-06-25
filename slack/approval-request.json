@@ -1,0 +1,76 @@
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": {
+        "type": "plain_text",
+        "text": "🛡️ SentinelOps — High Risk Deploy Detected",
+        "emoji": true
+      }
+    },
+    {
+      "type": "section",
+      "fields": [
+        {
+          "type": "mrkdwn",
+          "text": "*App:*\n{{APP_NAME}}"
+        },
+        {
+          "type": "mrkdwn",
+          "text": "*Build:*\n#{{BUILD_NUMBER}}"
+        },
+        {
+          "type": "mrkdwn",
+          "text": "*Risk Score:*\n{{RISK_SCORE}} / 100"
+        },
+        {
+          "type": "mrkdwn",
+          "text": "*Threshold:*\n{{RISK_THRESHOLD}}"
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "This build scored above the auto-promote threshold. Manual approval is required before deployment to the cluster."
+      }
+    },
+    {
+      "type": "actions",
+      "elements": [
+        {
+          "type": "button",
+          "text": {
+            "type": "plain_text",
+            "text": "✅ Approve Deploy",
+            "emoji": true
+          },
+          "style": "primary",
+          "value": "approve_{{BUILD_NUMBER}}",
+          "action_id": "approve_deploy"
+        },
+        {
+          "type": "button",
+          "text": {
+            "type": "plain_text",
+            "text": "❌ Deny Deploy",
+            "emoji": true
+          },
+          "style": "danger",
+          "value": "deny_{{BUILD_NUMBER}}",
+          "action_id": "deny_deploy"
+        }
+      ]
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "<{{BUILD_URL}}|View Jenkins Build>"
+        }
+      ]
+    }
+  ]
+}
