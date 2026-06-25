@@ -117,7 +117,7 @@ To tear everything down (stops billing for the EC2 instance):
 ## Project status
 
 - [x] Stage 0 — Repo scaffold, AWS EC2 + k3s (Terraform), Jenkins/SonarQube/Nexus (Compose via cloud-init)
-- [ ] Stage 1 — Spring Boot payload app
+- [x] Stage 1 — Spring Boot payload app (built, containerized, pushed to Nexus)
 - [ ] Stage 2 — CI pipeline + risk scoring engine
 - [ ] Stage 3 — GitOps deploy (ArgoCD) + observability (Prometheus/Grafana)
 - [ ] Stage 4 — Failure diagnosis + automatic rollback
