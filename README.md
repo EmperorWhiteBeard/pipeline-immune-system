@@ -11,14 +11,14 @@
 ## What it does
 
 1. **Build & Risk Gate** — every push triggers Jenkins, which builds the app, pushes the artifact to Nexus, then runs SonarQube, OWASP Dependency-Check, and Trivy in parallel. A custom Python scoring engine (`scoring/risk_score.py`) aggregates all three into a single 0–100 weighted risk score. Low score → auto-promote. High score → a Slack approval card gates the deploy.
-2. **GitOps Deploy & Live Watch** — ArgoCD continuously reconciles the cluster from Git. Prometheus scrapes the running app; Grafana overlays the risk score history against live error rate. Datadog monitors core CI/CD infrastructure (e.g. Jenkins container health) and alerts to Slack on failure/recovery.
+2. **GitOps Deploy & Live Watch** — ArgoCD continuously reconciles the cluster from Git. Datadog monitors the running app and infrastructure (e.g. Jenkins container health), tracking the risk score history against live error rate and alerting to Slack on failure/recovery.
 3. **Failure Diagnosis & Rollback** — if production error rate/latency crosses a threshold, a Flask listener pulls pod logs and the last build's scan reports, classifies the root cause (quality-gate fail / critical CVE / runtime fail), posts it to Slack, and calls the ArgoCD API to roll back to the last known-good commit.
 
 The closed loop: the same risk score that gated the deploy is the first thing the failure classifier checks. A low-risk build that still fails in production is a signal the scoring weights need tuning — a real, discussable insight rather than just tool-wiring.
 
 ## Payload application
 
-A deliberately simple Spring Boot REST API (task tracker) — `POST /tasks`, `GET /tasks`, `DELETE /tasks/{id}`, in-memory or H2-backed. It exists to give the pipeline something real to build, scan, and deploy. Exposes `/health` for Kubernetes probes and `/actuator/metrics` for Prometheus scraping.
+A deliberately simple Spring Boot REST API (task tracker) — `POST /tasks`, `GET /tasks`, `DELETE /tasks/{id}`, in-memory or H2-backed. It exists to give the pipeline something real to build, scan, and deploy. Exposes `/health` for Kubernetes probes and `/actuator/metrics` for metrics scraping.
 
 ## Tech stack
 
@@ -35,8 +35,7 @@ A deliberately simple Spring Boot REST API (task tracker) — `POST /tasks`, `GE
 | Containerization | Docker | Packages the app and runs the CI stack |
 | Orchestration | Kubernetes (k3s) | Runs the live app pods on the EC2 host |
 | CD / GitOps | ArgoCD | Syncs cluster state from Git, performs rollback |
-| Observability | Prometheus & Grafana | Metrics, alert rules, risk-score-vs-error-rate dashboard |
-| Infra Monitoring | Datadog | Container-level health monitoring (e.g. Jenkins uptime), Slack alerting |
+| Observability | Datadog | Container/infra health monitoring (e.g. Jenkins uptime), metrics, alerting — risk-score-vs-error-rate dashboard |
 | Alerts | Slack Webhooks | Approval cards, root-cause alerts, Datadog infra alerts |
 | Custom glue | Python (`scoring/`, `rootcause/`) | Aggregates scanner output into one score; classifies failure type |
 
@@ -63,8 +62,6 @@ A deliberately simple Spring Boot REST API (task tracker) — `POST /tasks`, `GE
 │   └── overlays/local/        # Local-cluster overlay
 ├── argocd/                    # ArgoCD Application manifests
 ├── monitoring/
-│   ├── prometheus/            # Alert rules
-│   ├── grafana/dashboards/    # Dashboard JSON
 │   └── datadog/               # Datadog monitor configs (Jenkins container health + Slack alerting)
 ├── slack/                     # Block Kit message templates
 └── docs/                      # Architecture diagrams, screenshots
@@ -121,10 +118,10 @@ To tear everything down (stops billing for the EC2 instance):
 - [x] Stage 0 — Repo scaffold, AWS EC2 + k3s (Terraform), Jenkins/SonarQube/Nexus (Compose via cloud-init)
 - [x] Stage 1 — Spring Boot payload app (built, containerized, pushed to Nexus)
 - [ ] Stage 2 — CI pipeline + risk scoring engine
-- [ ] Stage 3 — GitOps deploy (ArgoCD) + observability (Prometheus/Grafana)
+- [ ] Stage 3 — GitOps deploy (ArgoCD) + observability (Datadog)
   - [x] Datadog infra monitoring (Jenkins container health) + Slack alerting — see `monitoring/datadog/`
   - [ ] ArgoCD GitOps deploy
-  - [ ] Prometheus/Grafana risk-score-vs-error-rate dashboard
+  - [ ] Datadog risk-score-vs-error-rate dashboard
 - [ ] Stage 4 — Failure diagnosis + automatic rollback
 - [ ] Stage 5 — Polish, architecture diagram, demo recording
 
